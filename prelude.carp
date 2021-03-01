@@ -7,3 +7,10 @@
 
 (defmacro defndynamic [name args body]
   (list (quote def) name (list (quote fn) args body)))
+
+(def defmodule
+  (fn [name form]
+    (do
+      (eval (list (quote decl) name))
+      (eval form name))))
+(meta-set! defmodule "macro" true)

@@ -10,7 +10,25 @@ class ParseError(Exception): pass
 class RunError(Exception): pass
 
 
-class Env:
+class Expr:
+    def __init__(self):
+        self.meta = {}
+
+    def expand(self, env):
+        return self
+
+    def evaluate(self, env):
+        return self
+
+    def get_meta(self, k):
+        return self.meta.get(k.value, List([]))
+
+    def set_meta(self, k, v):
+        self.meta[k.value] = v
+        return self
+
+
+class Env(Expr):
     def __init__(self, parent=None, globalize=True):
         self.bindings = {}
         self.parent = parent
@@ -28,17 +46,26 @@ class Env:
             "meta": Primitive(meta, 2),
             "meta-set!": Primitive(meta_set, 3),
             "do": Primitive(do),
-            "eval": Primitive(eval_, 1),
+            "eval": Primitive(eval_),
             "cons": Primitive(cons, 2),
         }
         [self.evaluate(e) for e in PRELUDE]
 
     def lookup(self, k):
-        if k in self.bindings:
-            return self.bindings[k]
+        fst = k[0]
+        if fst in self.bindings:
+            res = self.bindings[fst]
+            if len(k) > 1:
+                return res.lookup(k[1:])
+            return res
         if self.parent:
             return self.parent.lookup(k)
         raise RunError(f"unknown variable: {k}")
+
+    def get_global(self):
+        if not self.parent:
+            return self
+        return self.parent.get_global()
 
     def bind(self, k, v):
         self.bindings[k] = v
@@ -46,26 +73,14 @@ class Env:
     def evaluate(self, expr):
         return expr.evaluate(self)
 
+    def evaluate_in(self, expr, e):
+        env = Env(parent=self)
+        res = env.evaluate(expr)
+        self.bindings[e.value] = env
+        return res
+
 
 empty_env = Env(globalize=False)
-
-
-class Expr:
-    def __init__(self):
-        self.meta = {}
-
-    def expand(self, env):
-        return self
-
-    def evaluate(self, env):
-        return self
-
-    def get_meta(self, k):
-        return self.meta.get(k.value, List([]))
-
-    def set_meta(self, k, v):
-        self.meta[k.value] = v
-        return self
 
 
 class Value(Expr):
@@ -88,7 +103,10 @@ class Boolean(Value):
 
 class Symbol(Value):
     def evaluate(self, env):
-        return env.lookup(self.value)
+        return env.lookup(self.path())
+
+    def path(self):
+        return self.value.split(".")
 
 
 class Call(Expr):
@@ -219,13 +237,13 @@ def decl(env, s):
 
 
 def meta(env, s, k):
-    e = env.lookup(s.value)
+    e = env.lookup(s.path())
 
     return e.get_meta(k)
 
 
 def meta_set(env, s, k, v):
-    e = env.lookup(s.value)
+    e = env.lookup(s.path())
     e.set_meta(k, env.evaluate(v))
 
     env.bind(s.value, e)
@@ -237,8 +255,13 @@ def do(env, args):
     return [env.evaluate(a) for a in args][-1]
 
 
-def eval_(env, expr):
-    return env.evaluate(env.evaluate(expr))
+def eval_(env, args):
+    if len(args) == 1:
+        return env.evaluate(env.evaluate(args[0]))
+    elif len(args) == 2:
+        return env.evaluate_in(env.evaluate(args[0]), env.evaluate(args[1]))
+    else:
+        raise RunError("eval expected one or two arguments, but got {len(args}")
 
 
 def cons(env, e, l):
@@ -287,7 +310,7 @@ def read_tokens(tokens, parent=None):
     builders = {
         "(": List,
         "[": Array,
-        "{": lambda l: cons(empty_env, Symbol("Map", "from-array"), List(make_pairs(l))),
+        "{": lambda l: cons(empty_env, Symbol("Map.from-array"), List(make_pairs(l))),
     }
     if not tokens:
         raise ParseError("Unclosed expression: {parent}")
