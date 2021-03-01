@@ -1,0 +1,9 @@
+(def defmacro
+  (fn [name args body]
+    (do
+      (eval (list (quote def) name (list (quote fn) args (list (quote eval) body))))
+      (eval (list (quote meta-set!) name "macro" true)))))
+(meta-set! defmacro "macro" true)
+
+(defmacro defndynamic [name args body]
+  (list (quote def) name (list (quote fn) args body)))
