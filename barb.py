@@ -27,9 +27,13 @@ class Expr:
         self.meta[k.value] = v
         return self
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__.lower()}>"
+
 
 class Env(Expr):
     def __init__(self, parent=None, globalize=True):
+        super().__init__()
         self.bindings = {}
         self.parent = parent
 
@@ -39,7 +43,7 @@ class Env(Expr):
     def globalize(self):
         self.bindings = {
             "decl": Primitive(decl, 1),
-            "def": Primitive(def_, 2),
+            "fn?": Primitive(isfn, 1),
             "fn": Primitive(fn, 2),
             "list": Primitive(list_),
             "quote": Primitive(quote, 1),
@@ -48,6 +52,12 @@ class Env(Expr):
             "do": Primitive(do),
             "eval": Primitive(eval_),
             "cons": Primitive(cons, 2),
+            "if": Primitive(if_, 3),
+            "prn": Primitive(prn),
+            "let": Primitive(let, 2),
+            "parent": Primitive(lambda e, env: e.evaluate(env).parent or List([]), 1),
+            "current-env": Primitive(lambda env: env, 0),
+            "make-env": Primitive(lambda _: Env.empty(), 0),
         }
         [self.evaluate(e) for e in PRELUDE]
 
@@ -60,7 +70,7 @@ class Env(Expr):
             return res
         if self.parent:
             return self.parent.lookup(k)
-        raise RunError(f"unknown variable: {k}")
+        raise RunError(f"unknown variable: {'.'.join(k)}")
 
     def get_global(self):
         if not self.parent:
@@ -79,8 +89,9 @@ class Env(Expr):
         self.bindings[e.value] = env
         return res
 
-
-empty_env = Env(globalize=False)
+    @staticmethod
+    def empty():
+        return Env(globalize=False)
 
 
 class Value(Expr):
@@ -103,7 +114,26 @@ class Boolean(Value):
 
 class Symbol(Value):
     def evaluate(self, env):
+        if self.meta.get("value"):
+            return self.meta["value"]
+        if self.meta.get("dispatches"):
+            raise RunError("TODO: what happens here?")
         return env.lookup(self.path())
+
+    def apply(self, args, env):
+        dispatches = self.meta.get("dispatches")
+
+        if not dispatches:
+            raise RunError(f"{self.value} is not a function, it has no dispatches!")
+
+        arity = len(args)
+
+        candidates = [cand for cand in dispatches if len(cand.args) == arity]
+
+        if not candidates:
+            raise RunError(f"{self.value} has no arity {arity} dispatch!")
+
+        return candidates[0].apply(args, env, macro=self.meta.get("macro"))
 
     def path(self):
         return self.value.split(".")
@@ -123,8 +153,8 @@ class Fn(Call):
     def evaluate(self, env):
         return Closure(self, env)
 
-    def apply(self, args, env):
-        return Closure(self, env).apply(args, env)
+    def apply(self, args, env, macro=None):
+        return Closure(self, env).apply(args, env, macro=macro)
 
 
 class Closure(Expr):
@@ -133,33 +163,29 @@ class Closure(Expr):
         self.env = env
         super().__init__()
 
-    def apply(self, args, env):
-        is_macro = self.fn.meta.get("macro", False)
+    def apply(self, args, env, macro=None):
+        is_macro = macro or self.fn.meta.get("macro", False)
         if is_macro:
             e = env
         else:
             e = Env(parent=self.env)
 
-        if len(args) != len(self.fn.args):
+        if len(args) != len(self.args):
             raise RunError(
-                f"function called with {len(args)} arguments, but expected {len(self.fn.args)}."
+                f"function called with {len(args)} arguments, but expected {len(self.args)}."
             )
 
-        for k, v in zip(self.fn.args, args):
+        for k, v in zip(self.args, args):
             e.bind(k.value, v if is_macro else env.evaluate(v))
-        return e.evaluate(self.fn.body)
+        return e.evaluate(self.body)
 
+    @property
+    def args(self):
+        return self.fn.args
 
-class CollectionIt:
-    def __init__(self, c):
-        self.c = c
-        self.idx = 0
-
-    def __next__(self):
-        if self.idx >= len(self.c):
-            raise StopIteration
-        self.idx += 1
-        return self.c.values[self.idx-1]
+    @property
+    def body(self):
+        return self.fn.body
 
 
 class Collection(Expr):
@@ -174,7 +200,10 @@ class Collection(Expr):
         return len(self.values)
 
     def __iter__(self):
-        return CollectionIt(self)
+        return self.values.__iter__()
+
+    def __getitem__(self, items):
+        return self.values.__getitem__(items)
 
 
 class Array(Collection):
@@ -183,6 +212,9 @@ class Array(Collection):
 
 
 class List(Collection):
+    def __bool__(self):
+        return len(self.values) != 0
+
     def __repr__(self):
         return f"({super().__repr__()})"
 
@@ -190,6 +222,9 @@ class List(Collection):
         if not self.values:
             raise RunError("Calling empty list!")
         return env.evaluate(self.values[0]).apply(self.values[1:], env)
+
+    def head(self):
+        return self.values[0] if self.values else List([])
 
 
 class Primitive(Expr):
@@ -199,7 +234,7 @@ class Primitive(Expr):
         super().__init__()
 
     def apply(self, args, env):
-        if self.arity:
+        if self.arity is not None:
             if len(args) != self.arity:
                 raise RunError(
                     f"primitive called with {len(args)} arguments, but expected {self.arity}."
@@ -216,6 +251,13 @@ def def_(env, s, v):
     v = env.evaluate(v)
     env.bind(s.value, v)
     return v
+
+
+def isfn(env, obj):
+    obj = env.evaluate(obj)
+    if isinstance(obj, Fn):
+        return Boolean(True)
+    return Boolean(False)
 
 
 def fn(env, args, body):
@@ -259,7 +301,10 @@ def eval_(env, args):
     if len(args) == 1:
         return env.evaluate(env.evaluate(args[0]))
     elif len(args) == 2:
-        return env.evaluate_in(env.evaluate(args[0]), env.evaluate(args[1]))
+        where = env.evaluate(args[1])
+        if isinstance(where, Env):
+            return where.evaluate(env.evaluate(args[0]))
+        return env.evaluate_in(env.evaluate(args[0]), where)
     else:
         raise RunError("eval expected one or two arguments, but got {len(args}")
 
@@ -270,6 +315,25 @@ def cons(env, e, l):
     n = l.values.copy()
     n.insert(0, e)
     return l.__class__(n)
+
+
+def if_(env, cond, then, els):
+    if env.evaluate(cond):
+        return env.evaluate(then)
+    return env.evaluate(els)
+
+
+def let(env, bindings, body):
+    e = Env(parent=env)
+
+    for k, v in make_pairs(bindings):
+        e.bind(k.value, e.evaluate(v))
+    return e.evaluate(body)
+
+
+def prn(env, args):
+    print(*(env.evaluate(arg) for arg in args))
+    return List([])
 
 
 def tokenize(s):
@@ -284,7 +348,7 @@ def tokenize(s):
 
 def make_pairs(l):
     if len(l) % 2 != 0:
-        raise ParseError("Map length not even.")
+        raise ParseError("pair length not even.")
     for i in range(0, len(l), 2):
         yield l[i:i+2]
 
@@ -310,7 +374,7 @@ def read_tokens(tokens, parent=None):
     builders = {
         "(": List,
         "[": Array,
-        "{": lambda l: cons(empty_env, Symbol("Map.from-array"), List(make_pairs(l))),
+        "{": lambda l: cons(Env.empty(), Symbol("Map.from-array"), List(make_pairs(l))),
     }
     if not tokens:
         raise ParseError("Unclosed expression: {parent}")
@@ -323,6 +387,8 @@ def read_tokens(tokens, parent=None):
         build = builders[token]
         while tokens[0] != closer:
             l.append(read_tokens(tokens, parent=token))
+            if not tokens:
+                raise ParseError(f"Unclosed expression: {token}")
         tokens.pop(0)
         return build(l)
     elif token in "}])":
@@ -402,7 +468,8 @@ def repl():
             continue
 
         try:
-            print("=>", [env.evaluate(e) for e in expr][-1])
+            res = [env.evaluate(e) for e in expr][-1]
+            print("=>", res.meta["value"] if "value" in res.meta else res)
         except RunError as e:
             print(e)
 

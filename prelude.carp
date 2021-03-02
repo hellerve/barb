@@ -1,12 +1,24 @@
+(decl def)
+(meta-set! def "dispatches" (list
+  (fn [name val]
+    (let [environ (parent (current-env))
+          val (eval val)]
+      (do
+        (eval (list (quote decl) name) environ)
+        (if (fn? val)
+          (eval (list (quote meta-set!) name "dispatches" (list (quote list) val)))
+          (eval (list (quote meta-set!) name "value" val))))))))
+(meta-set! def "macro" true)
+
 (def defmacro
   (fn [name args body]
     (do
-      (eval (list (quote def) name (list (quote fn) args (list (quote eval) body))))
+      (eval (list (quote def) name (list (quote fn) args body)))
       (eval (list (quote meta-set!) name "macro" true)))))
 (meta-set! defmacro "macro" true)
 
 (defmacro defndynamic [name args body]
-  (list (quote def) name (list (quote fn) args body)))
+  (eval (list (quote def) name (list (quote fn) args body))))
 
 (def defmodule
   (fn [name form]
