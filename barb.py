@@ -6,8 +6,12 @@ import readline
 import sys
 
 
-class ParseError(Exception): pass
-class RunError(Exception): pass
+class ParseError(Exception):
+    pass
+
+
+class RunError(Exception):
+    pass
 
 
 class Expr:
@@ -103,8 +107,12 @@ class Value(Expr):
         return str(self.value)
 
 
-class Number(Value): pass
-class String(Value): pass
+class Number(Value):
+    pass
+
+
+class String(Value):
+    pass
 
 
 class Boolean(Value):
@@ -338,7 +346,7 @@ def prn(env, args):
 
 def tokenize(s):
     s = s.replace(",", " ").replace(":", " ")
-    special = "(){}[]\""
+    special = '(){}[]"'
 
     for c in special:
         s = s.replace(c, f" {c} ")
@@ -350,7 +358,7 @@ def make_pairs(l):
     if len(l) % 2 != 0:
         raise ParseError("pair length not even.")
     for i in range(0, len(l), 2):
-        yield l[i:i+2]
+        yield l[i : i + 2]
 
 
 def read_string(tokens):
@@ -359,7 +367,7 @@ def read_string(tokens):
         t = tokens.pop(0)
         if t == '"':
             return " ".join(s)
-        if t.endswith('\\'):
+        if t.endswith("\\"):
             s.append(t[:-2])
             t = tokens.pop(0)
         s.append(t)
@@ -397,9 +405,9 @@ def read_tokens(tokens, parent=None):
         return Number(int(token))
     elif token == '"':
         return String(read_string(tokens))
-    elif token == 'true':
+    elif token == "true":
         return Boolean(True)
-    elif token == 'false':
+    elif token == "false":
         return Boolean(False)
     else:
         return Symbol(token)
@@ -484,7 +492,7 @@ with open("prelude.carp") as f:
     PRELUDE = parse(f.read())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if len(sys.argv) == 1:
         repl()
     elif len(sys.argv) == 2:
